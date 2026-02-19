@@ -3,7 +3,7 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import os
 import datetime
-import streamlit.components.v1 as components
+from streamlit_js_eval import streamlit_js_eval
 
 # -------------------------------
 # PAGE CONFIG
@@ -12,41 +12,44 @@ st.set_page_config(page_title="GeoTag Logo Camera App", layout="centered")
 
 st.title("📸 GeoTag Camera with Logo")
 
-st.info("Please allow camera and location access when prompted.")
+st.info("Please allow location access when prompted to see coordinates.")
 
 # -------------------------------
-# GET LOCATION FROM BROWSER
+# GET LOCATION
 # -------------------------------
-components.html(
-    """
-    <script>
-    navigator.geolocation.getCurrentPosition(
-        (position) => {
-            const lat = position.coords.latitude;
-            const lon = position.coords.longitude;
-            const input = document.createElement("input");
-            input.type = "hidden";
-            input.id = "geo";
-            input.value = lat + "," + lon;
-            document.body.appendChild(input);
-        }
-    );
-    </script>
-    """,
-    height=0,
-)
+st.subheader("📍 Location Information")
+loc = streamlit_js_eval(code='new Promise((resolve, reject) => { navigator.geolocation.getCurrentPosition(resolve, reject); })', key='get_loc')
 
-geo = st.text_input("📍 Location (auto-fetched)", key="geo", disabled=True)
+latitude = "N/A"
+longitude = "N/A"
+
+if loc:
+    latitude = loc.get("coords", {}).get("latitude", "N/A")
+    longitude = loc.get("coords", {}).get("longitude", "N/A")
+    st.success(f"Location fetched: {latitude}, {longitude}")
+else:
+    st.warning("Waiting for location access/data...")
 
 # -------------------------------
-# CAMERA INPUT
+# PHOTO SOURCE SELECTION
 # -------------------------------
-camera_image = st.camera_input("Click a photo")
+st.subheader("🖼️ Select Photo Source")
+photo_source = st.radio("How would you like to provide the photo?", ["Camera", "Upload Photo"])
 
-if camera_image is not None:
+target_image = None
 
+if photo_source == "Camera":
+    camera_image = st.camera_input("Click a photo")
+    if camera_image:
+        target_image = camera_image
+else:
+    uploaded_image = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
+    if uploaded_image:
+        target_image = uploaded_image
+
+if target_image is not None:
     # Convert image
-    image_bytes = camera_image.getvalue()
+    image_bytes = target_image.getvalue()
     base_image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
 
     # Get date & time
@@ -54,14 +57,8 @@ if camera_image is not None:
     date_str = now.strftime("%d %b %Y")
     time_str = now.strftime("%I:%M %p")
 
-    # Parse location
-    if geo:
-        latitude, longitude = geo.split(",")
-    else:
-        latitude, longitude = "N/A", "N/A"
-
     # -------------------------------
-    # DRAW LOCATION TEXT
+    # DRAW TEXT ON IMAGE
     # -------------------------------
     draw = ImageDraw.Draw(base_image)
 
@@ -72,44 +69,48 @@ if camera_image is not None:
         f"Longitude: {longitude}"
     )
 
-    # Text position
-    draw.rectangle((0, base_image.height - 150, base_image.width, base_image.height), fill="white")
-    draw.text((20, base_image.height - 130), text, fill="black")
+    # Calculate text position (bottom left overlay)
+    # Using a simple rectangle for readability
+    rect_height = 150
+    draw.rectangle((0, base_image.height - rect_height, base_image.width, base_image.height), fill=(255, 255, 255, 180))
+    draw.text((20, base_image.height - rect_height + 20), text, fill="black")
 
-    st.subheader("📍 Geo Information")
-    st.write(text)
+    st.subheader("📍 Geo Information Summary")
+    st.text(text)
 
     # -------------------------------
-    # LOGO UPLOAD (AS YOU ASKED)
+    # LOGO UPLOAD
     # -------------------------------
-    st.subheader("Upload Logo")
-    logo_file = st.file_uploader("Upload logo (PNG preferred)", type=["png", "jpg", "jpeg"])
+    st.subheader("🎨 Add Logo")
+    logo_file = st.file_uploader("Upload logo (PNG preferred)", type=["png", "jpg", "jpeg"], key="logo_uploader")
 
     if logo_file is not None:
         logo = Image.open(logo_file).convert("RGBA")
 
-        # -------- LOGO SETTINGS (UNCHANGED) --------
-        logo = logo.resize((150, 150))
+        # Resize logo
+        logo_size = (150, 150)
+        logo = logo.resize(logo_size)
+        
         img_w, img_h = base_image.size
-        logo_x = img_w - 170
+        logo_x = img_w - logo_size[0] - 20
         logo_y = 20
 
         base_image.paste(logo, (logo_x, logo_y), logo)
 
-        # -------------------------------
-        # SAVE IMAGE
-        # -------------------------------
-        os.makedirs("output_images", exist_ok=True)
-        output_path = "output_images/final_image.png"
-        base_image.save(output_path)
+    # -------------------------------
+    # PREVIEW & DOWNLOAD
+    # -------------------------------
+    st.subheader("✅ Final Result")
+    st.image(base_image, use_container_width=True)
 
-        st.subheader("✅ Final Image")
-        st.image(base_image, use_container_width=True)
+    # Save to buffer for download
+    buf = io.BytesIO()
+    base_image.save(buf, format="PNG")
+    byte_im = buf.getvalue()
 
-        with open(output_path, "rb") as f:
-            st.download_button(
-                "⬇ Download Final Image",
-                f,
-                file_name="geotag_image.png",
-                mime="image/png"
-            )
+    st.download_button(
+        label="⬇ Download Final Image",
+        data=byte_im,
+        file_name="geotag_image.png",
+        mime="image/png"
+    )
