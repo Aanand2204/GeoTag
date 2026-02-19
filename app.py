@@ -3,7 +3,7 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import os
 import datetime
-from streamlit_js_eval import streamlit_js_eval
+from streamlit_js_eval import get_geolocation
 
 # -------------------------------
 # PAGE CONFIG
@@ -12,23 +12,30 @@ st.set_page_config(page_title="GeoTag Logo Camera App", layout="centered")
 
 st.title("📸 GeoTag Camera with Logo")
 
-st.info("Please allow location access when prompted to see coordinates.")
-
 # -------------------------------
 # GET LOCATION
 # -------------------------------
 st.subheader("📍 Location Information")
-loc = streamlit_js_eval(code='new Promise((resolve, reject) => { navigator.geolocation.getCurrentPosition(resolve, reject); })', key='get_loc')
+
+# Inform user about security requirements for geolocation
+st.info("💡 **Tip:** Geolocation requires a secure context. Ensure you are accessing this app via **localhost** or **HTTPS**. If you don't see a prompt, check your browser's site settings.")
+
+# Use the built-in get_geolocation function which is more reliable
+loc = get_geolocation()
 
 latitude = "N/A"
 longitude = "N/A"
 
 if loc:
-    latitude = loc.get("coords", {}).get("latitude", "N/A")
-    longitude = loc.get("coords", {}).get("longitude", "N/A")
-    st.success(f"Location fetched: {latitude}, {longitude}")
+    if "coords" in loc:
+        latitude = loc["coords"].get("latitude", "N/A")
+        longitude = loc["coords"].get("longitude", "N/A")
+        st.success(f"Location fetched: {latitude}, {longitude}")
+    elif "error" in loc:
+        st.error(f"Location error: {loc['error'].get('message', 'Unknown error')}")
+        st.warning("Please ensure location is enabled in your browser settings.")
 else:
-    st.warning("Waiting for location access/data...")
+    st.warning("Waiting for location access... Please allow access if prompted by your browser.")
 
 # -------------------------------
 # PHOTO SOURCE SELECTION
@@ -70,7 +77,6 @@ if target_image is not None:
     )
 
     # Calculate text position (bottom left overlay)
-    # Using a simple rectangle for readability
     rect_height = 150
     draw.rectangle((0, base_image.height - rect_height, base_image.width, base_image.height), fill=(255, 255, 255, 180))
     draw.text((20, base_image.height - rect_height + 20), text, fill="black")
