@@ -4,6 +4,8 @@ import io
 import os
 import datetime
 from streamlit_js_eval import get_geolocation
+from geopy.geocoders import Nominatim
+import textwrap
 
 # -------------------------------
 # PAGE CONFIG
@@ -12,34 +14,77 @@ st.set_page_config(page_title="GeoTag Logo Camera App", layout="centered")
 
 st.title("📸 GeoTag Camera with Logo")
 
+# Initialize geocoder
+geolocator = Nominatim(user_agent="geotag_camera_app")
+
+# Session state for location
+if "latitude" not in st.session_state:
+    st.session_state.latitude = "N/A"
+if "longitude" not in st.session_state:
+    st.session_state.longitude = "N/A"
+if "address" not in st.session_state:
+    st.session_state.address = "N/A"
+
 # -------------------------------
-# GET LOCATION
+# GET LOCATION (AUTO)
 # -------------------------------
 st.subheader("📍 Location Information")
 
 # Inform user about security requirements for geolocation
-st.info("💡 **Tip:** Geolocation requires a secure context. Ensure you are accessing this app via **localhost** or **HTTPS**. If you don't see a prompt, check your browser's site settings.")
+st.info("💡 **Tip:** Geolocation requires a secure context (localhost or HTTPS). If you don't see a prompt, check your browser's site settings.")
 
-# Use the built-in get_geolocation function which is more reliable
+# Use the built-in get_geolocation function
 loc = get_geolocation()
 
-latitude = "N/A"
-longitude = "N/A"
+if loc and "coords" in loc:
+    auto_lat = loc["coords"].get("latitude")
+    auto_lon = loc["coords"].get("longitude")
+    
+    # Only update if it's the first time or auto-detect is requested
+    if st.session_state.latitude == "N/A":
+        st.session_state.latitude = auto_lat
+        st.session_state.longitude = auto_lon
+        
+        # Reverse Geocode
+        try:
+            location = geolocator.reverse(f"{auto_lat}, {auto_lon}")
+            if location:
+                st.session_state.address = location.address
+        except Exception as e:
+            st.error(f"Error fetching address: {e}")
 
-if loc:
-    if "coords" in loc:
-        latitude = loc["coords"].get("latitude", "N/A")
-        longitude = loc["coords"].get("longitude", "N/A")
-        st.success(f"Location fetched: {latitude}, {longitude}")
-    elif "error" in loc:
-        st.error(f"Location error: {loc['error'].get('message', 'Unknown error')}")
-        st.warning("Please ensure location is enabled in your browser settings.")
-else:
-    st.warning("Waiting for location access... Please allow access if prompted by your browser.")
+# -------------------------------
+# MANUAL LOCATION SEARCH
+# -------------------------------
+st.markdown("---")
+st.subheader("🔍 Search & Correct Location")
+search_query = st.text_input("If address is wrong, search here (e.g., 'SPPU, Pune')")
+
+if st.button("Search and Update"):
+    if search_query:
+        try:
+            location = geolocator.geocode(search_query)
+            if location:
+                st.session_state.latitude = location.latitude
+                st.session_state.longitude = location.longitude
+                st.session_state.address = location.address
+                st.success(f"Location updated to: {location.address}")
+            else:
+                st.error("Location not found. Please be more specific.")
+        except Exception as e:
+            st.error(f"Search error: {e}")
+    else:
+        st.warning("Please enter a location to search.")
+
+# Display current location status
+st.write(f"**Current Latitude:** {st.session_state.latitude}")
+st.write(f"**Current Longitude:** {st.session_state.longitude}")
+st.write(f"**Current Address:** {st.session_state.address}")
 
 # -------------------------------
 # PHOTO SOURCE SELECTION
 # -------------------------------
+st.markdown("---")
 st.subheader("🖼️ Select Photo Source")
 photo_source = st.radio("How would you like to provide the photo?", ["Camera", "Upload Photo"])
 
@@ -68,16 +113,22 @@ if target_image is not None:
     # DRAW TEXT ON IMAGE
     # -------------------------------
     draw = ImageDraw.Draw(base_image)
+    
+    # Wrap address text if it's too long
+    # We estimate width based on image size (approx 40-50 chars for standard mobile aspect)
+    wrapped_address = textwrap.fill(st.session_state.address, width=50)
 
     text = (
-        f"Date: {date_str}\n"
-        f"Time: {time_str}\n"
-        f"Latitude: {latitude}\n"
-        f"Longitude: {longitude}"
+        f"Date: {date_str}   Time: {time_str}\n"
+        f"Lat: {st.session_state.latitude}, Lon: {st.session_state.longitude}\n"
+        f"Address: {wrapped_address}"
     )
 
     # Calculate text position (bottom left overlay)
-    rect_height = 150
+    # Adjust height based on wrapped text lines
+    line_count = text.count('\n') + 1
+    rect_height = 40 + (line_count * 30) 
+    
     draw.rectangle((0, base_image.height - rect_height, base_image.width, base_image.height), fill=(255, 255, 255, 180))
     draw.text((20, base_image.height - rect_height + 20), text, fill="black")
 
