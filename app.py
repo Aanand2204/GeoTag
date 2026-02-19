@@ -5,6 +5,7 @@ import os
 import datetime
 from streamlit_js_eval import get_geolocation, streamlit_js_eval
 from geopy.geocoders import Nominatim
+from geopy.distance import geodesic
 import textwrap
 
 # -------------------------------
@@ -15,227 +16,188 @@ st.set_page_config(page_title="GeoTag Camera", layout="centered", initial_sideba
 # Snapchat-style / Modern Mobile CSS
 st.markdown("""
     <style>
-    /* Main Background */
-    .main {
-        background-color: #f0f2f6;
-    }
-    
-    /* Header Style */
-    .stApp header {
-        background-color: transparent;
-    }
-    
-    /* Custom Card Style */
-    .css-1r6slb0, .stVerticalBlock {
-        gap: 1.5rem;
-    }
-    
+    .main { background-color: #f7f7f7; }
     .snap-header {
         font-family: 'Avenir Next', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-        font-weight: 800;
-        color: #000;
-        font-size: 2.5rem;
-        text-align: center;
-        margin-bottom: 0.5rem;
-        letter-spacing: -1px;
+        font-weight: 800; color: #000; font-size: 2.5rem;
+        text-align: center; margin-bottom: 0.5rem; letter-spacing: -1px;
     }
+    .snap-subheader { color: #888; text-align: center; font-size: 1rem; margin-bottom: 2rem; }
     
-    .snap-subheader {
-        color: #888;
-        text-align: center;
-        font-size: 1rem;
-        margin-bottom: 2rem;
-    }
-    
-    /* Styled Radio / Tabs */
+    /* Styled Radio */
     div.row-widget.stRadio > div {
-        flex-direction: row;
-        justify-content: center;
-        background: #fff;
-        padding: 5px;
-        border-radius: 50px;
+        flex-direction: row; justify-content: center;
+        background: #fff; padding: 5px; border-radius: 50px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.05);
     }
     
-    /* Hide some Streamlit defaults */
+    /* Places List Item Style */
+    .place-item {
+        background: white;
+        padding: 12px 18px;
+        border-radius: 15px;
+        margin-bottom: 10px;
+        border-left: 5px solid #FFFC00;
+        cursor: pointer;
+        transition: all 0.2s;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+    }
+    .place-item:hover { transform: scale(1.02); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    .place-name { font-weight: bold; font-size: 1.1rem; color: #000; margin: 0; }
+    .place-address { font-size: 0.85rem; color: #666; margin: 2px 0; }
+    .place-distance { font-size: 0.8rem; color: #FFFC00; font-weight: bold; background: #000; padding: 2px 8px; border-radius: 10px; display: inline-block; }
+
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     
-    /* Success/Info boxes rounded */
-    .stAlert {
-        border-radius: 15px;
-        border: none;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-    }
-    
     /* Button Style */
     .stButton > button {
-        border-radius: 25px;
-        padding: 0.6rem 2rem;
-        background-color: #FFFC00; /* Snapchat Yellow */
-        color: #000;
-        font-weight: bold;
-        border: none;
-        box-shadow: 0 4px 14px rgba(255, 252, 0, 0.4);
-        transition: all 0.3s ease;
-    }
-    
-    .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(255, 252, 0, 0.6);
-        background-color: #FFFC00;
-        color: #000;
-    }
-    
-    /* Input Styling */
-    .stTextInput > div > div > input {
-        border-radius: 15px;
+        border-radius: 25px; padding: 0.6rem 2rem;
+        background-color: #FFFC00; color: #000; font-weight: bold;
+        border: none; box-shadow: 0 4px 14px rgba(255, 252, 0, 0.4);
     }
     </style>
     """, unsafe_allow_html=True)
 
 st.markdown('<div class="snap-header">GeoTag Camera</div>', unsafe_allow_html=True)
-st.markdown('<div class="snap-subheader">Capture moments with precise details</div>', unsafe_allow_html=True)
+st.markdown('<div class="snap-subheader">Discover places and capture memories</div>', unsafe_allow_html=True)
 
 # Initialize geocoders and state
-geolocator = Nominatim(user_agent="geotag_camera_app_v2")
+geolocator = Nominatim(user_agent="geotag_camera_v3")
 
-if "latitude" not in st.session_state:
-    st.session_state.latitude = "N/A"
-if "longitude" not in st.session_state:
-    st.session_state.longitude = "N/A"
-if "address" not in st.session_state:
-    st.session_state.address = "N/A"
-if "local_time" not in st.session_state:
-    st.session_state.local_time = "N/A"
+if "latitude" not in st.session_state: st.session_state.latitude = None
+if "longitude" not in st.session_state: st.session_state.longitude = None
+if "selected_venue" not in st.session_state: st.session_state.selected_venue = "Current Location"
+if "full_address" not in st.session_state: st.session_state.full_address = "Detecting..."
+if "local_time" not in st.session_state: st.session_state.local_time = "N/A"
+if "search_results" not in st.session_state: st.session_state.search_results = []
 
 # -------------------------------
-# FETCH BROWSER DATA (TIME & LOC)
+# DATA FETCHING
 # -------------------------------
-# 1. Fetch Local Time from Browser
-browser_time_str = streamlit_js_eval(code='new Date().toLocaleString()', key='time_fetch')
-if browser_time_str:
-    st.session_state.local_time = browser_time_str
+# 1. Fetch Browser Local Time
+t = streamlit_js_eval(code='new Date().toLocaleString()', key='time_v3')
+if t: st.session_state.local_time = t
 
 # 2. Fetch Location
 loc = get_geolocation()
-
 if loc and "coords" in loc:
-    auto_lat = loc["coords"].get("latitude")
-    auto_lon = loc["coords"].get("longitude")
-    
-    if st.session_state.latitude == "N/A" or st.session_state.latitude is None:
-        st.session_state.latitude = auto_lat
-        st.session_state.longitude = auto_lon
-        
+    lat, lon = loc["coords"].get("latitude"), loc["coords"].get("longitude")
+    if st.session_state.latitude is None:
+        st.session_state.latitude, st.session_state.longitude = lat, lon
         try:
-            location = geolocator.reverse(f"{auto_lat}, {auto_lon}")
-            if location:
-                st.session_state.address = location.address
-        except Exception:
-            pass
+            rev_loc = geolocator.reverse(f"{lat}, {lon}")
+            if rev_loc: st.session_state.full_address = rev_loc.address
+        except: pass
 
 # -------------------------------
-# LOCATION & TIME STATUS CARDS
+# SEARCH & PLACES (SNAPCHAT STYLE)
 # -------------------------------
-col1, col2 = st.columns(2)
-with col1:
-    st.metric("🕒 Local Time", st.session_state.local_time.split(", ")[-1] if "," in st.session_state.local_time else st.session_state.local_time)
-with col2:
-    st.metric("📅 Date", st.session_state.local_time.split(", ")[0] if "," in st.session_state.local_time else "N/A")
+st.markdown("### 🔍 Search Places")
+query = st.text_input("", placeholder="Search for a venue, cafe, or park...", label_visibility="collapsed")
 
-st.info(f"📍 **Current Address:** {st.session_state.address}")
+if st.button("Find Places"):
+    if query:
+        try:
+            results = geolocator.geocode(query, exactly_one=False, limit=5)
+            if results:
+                st.session_state.search_results = results
+            else:
+                st.error("No places found.")
+        except Exception as e:
+            st.error(f"Search error: {e}")
 
-# -------------------------------
-# SEARCH & CORRECTION
-# -------------------------------
-with st.expander("🔍 Incorrect location? Search here"):
-    search_query = st.text_input("Enter location (e.g., 'SPPU, Pune')")
-    if st.button("Update Location"):
-        if search_query:
-            try:
-                res = geolocator.geocode(search_query)
-                if res:
-                    st.session_state.latitude = res.latitude
-                    st.session_state.longitude = res.longitude
-                    st.session_state.address = res.address
-                    st.success(f"Updated to: {res.address}")
+# Display Places List
+if st.session_state.search_results:
+    st.markdown("#### Found Places")
+    for place in st.session_state.search_results:
+        # Calculate distance if we have current location
+        dist_str = ""
+        if st.session_state.latitude and st.session_state.longitude:
+            d = geodesic((st.session_state.latitude, st.session_state.longitude), (place.latitude, place.longitude)).meters
+            dist_str = f"{int(d)} m" if d < 1000 else f"{round(d/1000, 1)} km"
+
+        with st.container():
+            col_info, col_btn = st.columns([4, 1])
+            with col_info:
+                # We try to extract a 'name' if available, otherwise use first part of address
+                name = place.address.split(",")[0]
+                addr = ", ".join(place.address.split(",")[1:3])
+                st.markdown(f"""
+                    <div class="place-item">
+                        <p class="place-name">{name}</p>
+                        <p class="place-address">{addr}</p>
+                        <span class="place-distance">{dist_str}</span>
+                    </div>
+                """, unsafe_allow_html=True)
+            with col_btn:
+                if st.button("Select", key=f"sel_{place.latitude}_{place.longitude}"):
+                    st.session_state.selected_venue = name
+                    st.session_state.full_address = place.address
+                    st.session_state.latitude = place.latitude
+                    st.session_state.longitude = place.longitude
+                    st.success(f"Selected: {name}")
                     st.rerun()
-                else:
-                    st.error("Location not found.")
-            except Exception as e:
-                st.error(f"Error: {e}")
 
 # -------------------------------
-# PHOTO SOURCE SELECTION (MODERN TOGGLE)
+# CURRENT SELECTION SUMMARY
 # -------------------------------
-st.markdown("### 📸 Take or Upload Photo")
-photo_source = st.radio("", ["Camera", "Upload Image"], label_visibility="collapsed")
+st.markdown("---")
+st.write(f"🌟 **Targeting:** {st.session_state.selected_venue}")
+st.write(f"🕒 **Time:** {st.session_state.local_time}")
 
-target_image = None
+# -------------------------------
+# PHOTO LOGIC
+# -------------------------------
+st.markdown("### 📸 Capture / Upload")
+src = st.radio("", ["Camera", "Gallery"], label_visibility="collapsed")
 
-if photo_source == "Camera":
-    camera_image = st.camera_input("Click a photo")
-    if camera_image:
-        target_image = camera_image
+img_input = None
+if src == "Camera":
+    img_input = st.camera_input("Smile!")
 else:
-    uploaded_image = st.file_uploader("Upload from gallery", type=["png", "jpg", "jpeg"])
-    if uploaded_image:
-        target_image = uploaded_image
+    img_input = st.file_uploader("Choose a photo", type=["jpg", "png", "jpeg"])
 
-if target_image is not None:
-    # Process Image
-    base_image = Image.open(io.BytesIO(target_image.getvalue())).convert("RGBA")
+if img_input:
+    img = Image.open(io.BytesIO(img_input.getvalue())).convert("RGBA")
+    draw = ImageDraw.Draw(img)
     
-    # Text Overlay Logic
-    draw = ImageDraw.Draw(base_image)
-    
-    # Format text for overlay
-    time_display = st.session_state.local_time
-    wrapped_address = textwrap.fill(st.session_state.address, width=45)
-    
+    # Snapchat-style Text Overlay (Main Event)
+    venue = st.session_state.selected_venue.upper()
+    time_val = st.session_state.local_time
+    gps_info = f"{st.session_state.latitude}, {st.session_state.longitude}"
+    address_wrapped = textwrap.fill(st.session_state.full_address, width=50)
+
     overlay_text = (
-        f"Time: {time_display}\n"
-        f"GPS: {st.session_state.latitude}, {st.session_state.longitude}\n"
-        f"Loc: {wrapped_address}"
+        f"{venue}\n"
+        f"--------------------------\n"
+        f"{time_val}\n"
+        f"GPS: {gps_info}\n"
+        f"{address_wrapped}"
     )
 
-    # Dynamic Background Rectangle (Snapchat-style bottom translucent bar)
+    # Dynamic Height Calculation
     line_count = overlay_text.count('\n') + 1
-    rect_h = 60 + (line_count * 35)
+    rect_h = 80 + (line_count * 35)
     
-    # Semi-transparent black background for white text (Pro Look)
-    draw.rectangle((0, base_image.height - rect_h, base_image.width, base_image.height), fill=(0, 0, 0, 160))
+    # Translucent Background for readability
+    draw.rectangle((0, img.height - rect_h, img.width, img.height), fill=(0, 0, 0, 180))
     
-    # Using default font (can expand to custom .ttf later)
-    draw.text((30, base_image.height - rect_h + 20), overlay_text, fill="white")
+    # Font Style (Simple default but spaced)
+    draw.text((40, img.height - rect_h + 30), overlay_text, fill="white")
 
-    # -------------------------------
-    # LOGO & ACTION BAR
-    # -------------------------------
+    # Optional Logo
+    # (Keeping the logo upload available)
     st.markdown("---")
-    col_l, col_r = st.columns([1, 1])
+    l_file = st.file_uploader("Add Logo (Optional)", type=["png", "jpg"])
+    if l_file:
+        logo = Image.open(l_file).convert("RGBA").resize((150, 150))
+        img.paste(logo, (img.width - 180, 40), logo)
+
+    # Preview & Download
+    st.markdown("### ✨ Final Snap")
+    st.image(img, use_container_width=True)
     
-    with col_l:
-        st.markdown("#### 🎨 Brand Logo")
-        logo_file = st.file_uploader("Optional Logo", type=["png", "jpg", "jpeg"], key="logo_up")
-        if logo_file:
-            logo = Image.open(logo_file).convert("RGBA")
-            logo = logo.resize((150, 150))
-            base_image.paste(logo, (base_image.width - 170, 30), logo)
-
-    with col_r:
-        # Final Download Button in the right column
-        st.markdown("#### 🚀 Action")
-        buf = io.BytesIO()
-        base_image.save(buf, format="PNG")
-        st.download_button(
-            label="⬇️ Download Photo",
-            data=buf.getvalue(),
-            file_name=f"GeoTag_{datetime.datetime.now().strftime('%H%M%S')}.png",
-            mime="image/png"
-        )
-
-    # Preview
-    st.markdown("### ✨ Preview")
-    st.image(base_image, use_container_width=True)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    st.download_button("⬇️ Download Snap", buf.getvalue(), f"Snap_{datetime.datetime.now().strftime('%M%S')}.png", "image/png")
